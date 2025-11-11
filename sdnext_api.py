@@ -1,4 +1,4 @@
-# sdnext_api.py - 100% WORKING, NO BUILD ERRORS
+# sdnext_api.py - FIX: Semua dependencies terinstall dengan benar
 import modal
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -13,31 +13,32 @@ GPU_TYPE = os.getenv("MODAL_GPU_TYPE", "L4")
 
 app = modal.App("sdnext-backend")
 
-# ✅ FIX: Hapus sentencepiece, install langsung dari PyPI (pre-built)
-# ✅ FIX: Pastikan tidak ada spasi di URL
-image = modal.Image.debian_slim().apt_install(
-    "git", "libgl1-mesa-glx", "libglib2.0-0",
-    "pkg-config", "build-essential"
+# ✅ FIX: Urutan install yang benar & explicit Python version
+image = modal.Image.debian_slim().python_version("3.11").apt_install(
+    "git", "libgl1-mesa-glx", "libglib2.0-0", "pkg-config", "build-essential"
 ).pip_install(
-    # PyTorch - Modal akan handle CUDA version otomatis
-    "torch", "torchvision", "torchaudio",
-    # Install transformers DULU (bawa sentencepiece pre-built)
-    "transformers", 
-    "accelerate", 
-    "diffusers", 
-    "safetensors", 
-    "einops",
-    "opencv-python", 
-    "Pillow", 
-    "fastapi", 
-    "uvicorn", 
-    "pydantic",
-    "gradio", 
-    "psutil", 
-    "requests", 
-    "numpy", 
-    "scipy",
-    "huggingface_hub"
+    # Install PyTorch FIRST (official Modal way)
+    "torch==2.3.1",
+    "torchvision==0.18.1", 
+    "torchaudio==2.3.1",
+    # Install ML deps
+    "diffusers==0.30.0",
+    "transformers==4.44.2",
+    "accelerate==0.33.0",
+    "safetensors==0.4.4",
+    "einops==0.8.0",
+    # Install web deps (PASTIKAN semua ada)
+    "fastapi==0.115.0",
+    "uvicorn==0.32.0",
+    "pydantic==2.9.0",
+    "gradio==4.44.0",
+    "psutil==6.0.0",
+    "requests==2.32.3",
+    "numpy==1.26.4",
+    "scipy==1.14.1",
+    "opencv-python==4.10.0.84",
+    "Pillow==10.4.0",
+    "huggingface_hub==0.25.2"
 )
 
 class Text2ImageRequest(BaseModel):
@@ -55,11 +56,13 @@ class ImageResponse(BaseModel):
     image_base64: str
     info: dict
 
+# ✅ FIX: force_build=True untuk rebuild image dari 0
 @app.cls(
     gpu=GPU_TYPE,
     timeout=600,
     scaledown_window=300,
-    image=image
+    image=image,
+    force_build=True  # PENTING! Force rebuild image
 )
 class SDNextModel:
     def __enter__(self):
