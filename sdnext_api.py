@@ -1,7 +1,7 @@
-# sdnext_api.py - FIXED version
+# sdnext_api.py - COMPATIBLE with Modal v1.0+
 import modal
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel  # ✅ IMPORT DARI PYDANTIC
+from fastapi import FastAPI, HTTPException  # ✅ FastAPI dari sini
+from pydantic import BaseModel
 import base64
 from io import BytesIO
 import torch
@@ -23,7 +23,6 @@ image = modal.Image.debian_slim().apt_install(
     "k-diffusion", "gradio", "psutil", "requests", "numpy", "scipy"
 ).pip_install("huggingface_hub")
 
-# ✅ BUANG 'modal.' - pakai BaseModel saja
 class Text2ImageRequest(BaseModel):
     prompt: str
     negative_prompt: str = ""
@@ -39,7 +38,12 @@ class ImageResponse(BaseModel):
     image_base64: str
     info: dict
 
-@app.cls(gpu=GPU_TYPE, timeout=600, container_idle_timeout=300, image=image)
+@app.cls(
+    gpu=GPU_TYPE,
+    timeout=600,
+    scaledown_window=300,  # ✅ FIX: container_idle_timeout -> scaledown_window
+    image=image
+)
 class SDNextModel:
     def __enter__(self):
         print(f"🚀 Initializing SD.Next on {GPU_TYPE}...")
@@ -124,7 +128,8 @@ class SDNextModel:
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
-web_app = modal.FastAPI()
+# ✅ FIX: Ganti modal.FastAPI() -> FastAPI()
+web_app = FastAPI()
 
 @web_app.post("/generate")
 async def generate_image(request: Text2ImageRequest):
