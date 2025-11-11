@@ -1,7 +1,7 @@
-# sdnext_api.py
+# sdnext_api.py - FIXED version
 import modal
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel  # ✅ IMPORT DARI PYDANTIC
 import base64
 from io import BytesIO
 import torch
@@ -16,14 +16,15 @@ image = modal.Image.debian_slim().apt_install(
     "git", "libgl1-mesa-glx", "libglib2.0-0"
 ).pip_install(
     "torch", "torchvision", "torchaudio",
-    extra_options=["--index-url", "https://download.pytorch.org/whl/cu118"]  # ✅ FIX INI!
+    extra_options=["--index-url", "https://download.pytorch.org/whl/cu118"]
 ).pip_install(
     "diffusers", "transformers", "accelerate", "safetensors", "einops",
     "opencv-python", "Pillow", "fastapi", "uvicorn", "pydantic",
     "k-diffusion", "gradio", "psutil", "requests", "numpy", "scipy"
 ).pip_install("huggingface_hub")
 
-class Text2ImageRequest(modal.BaseModel):
+# ✅ BUANG 'modal.' - pakai BaseModel saja
+class Text2ImageRequest(BaseModel):
     prompt: str
     negative_prompt: str = ""
     width: int = 512
@@ -34,7 +35,7 @@ class Text2ImageRequest(modal.BaseModel):
     sampler: str = "Euler a"
     model: str = "stable-diffusion-v1-5"
 
-class ImageResponse(modal.BaseModel):
+class ImageResponse(BaseModel):
     image_base64: str
     info: dict
 
