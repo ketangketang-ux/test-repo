@@ -47,7 +47,8 @@ def run():
     "--skip-torch-cuda-test",
     "--disable-safe-unpickle",
     "--no-onnx",              # 💥 ini yang penting
-    "--no-half",              # kadang perlu kalau GPU pakai FP32
+    "--no-half",            
+    "--use-openvino=False",       # kadang perlu kalau GPU pakai FP32
     "--data-dir", DATA_DIR,
     "--autolaunch",
 ]
