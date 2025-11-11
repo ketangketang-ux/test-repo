@@ -41,14 +41,17 @@ def run():
     # --- Jalankan SD.Next ---
     def start_sdnext():
         cmd = [
-            "python", "webui.py",
-            "--listen", "0.0.0.0",
-            "--port", "8000",
-            "--api",
-            "--skip-torch-cuda-test",
-            "--disable-safe-unpickle",
-            "--data-dir", DATA_DIR,
-        ]
+    "python", "webui.py",
+    "--listen", "0.0.0.0",
+    "--port", "8000",
+    "--skip-torch-cuda-test",
+    "--disable-safe-unpickle",
+    "--no-onnx",              # 💥 ini yang penting
+    "--no-half",              # kadang perlu kalau GPU pakai FP32
+    "--data-dir", DATA_DIR,
+    "--autolaunch",
+]
+
         subprocess.Popen(cmd, cwd=ROOT_DIR, env=os.environ.copy())
 
     threading.Thread(target=start_sdnext, daemon=True).start()
