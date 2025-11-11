@@ -1,6 +1,6 @@
-# sdnext_api.py - COMPATIBLE with Modal v1.0+
+# sdnext_api.py - MODAL V1.0+ COMPATIBLE
 import modal
-from fastapi import FastAPI, HTTPException  # ✅ FastAPI dari sini
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import base64
 from io import BytesIO
@@ -15,9 +15,8 @@ app = modal.App("sdnext-backend")
 image = modal.Image.debian_slim().apt_install(
     "git", "libgl1-mesa-glx", "libglib2.0-0"
 ).pip_install(
+    # ✅ FIX: Hapus extra_options, biarkan Modal handle CUDA version
     "torch", "torchvision", "torchaudio",
-    extra_options=["--index-url", "https://download.pytorch.org/whl/cu118"]
-).pip_install(
     "diffusers", "transformers", "accelerate", "safetensors", "einops",
     "opencv-python", "Pillow", "fastapi", "uvicorn", "pydantic",
     "k-diffusion", "gradio", "psutil", "requests", "numpy", "scipy"
@@ -41,7 +40,7 @@ class ImageResponse(BaseModel):
 @app.cls(
     gpu=GPU_TYPE,
     timeout=600,
-    scaledown_window=300,  # ✅ FIX: container_idle_timeout -> scaledown_window
+    scaledown_window=300,  # ✅ Modal v1.0+ parameter
     image=image
 )
 class SDNextModel:
@@ -128,7 +127,6 @@ class SDNextModel:
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
-# ✅ FIX: Ganti modal.FastAPI() -> FastAPI()
 web_app = FastAPI()
 
 @web_app.post("/generate")
