@@ -17,8 +17,7 @@ image = (
     .apt_install("git", "ffmpeg", "libgl1-mesa-glx", "libglib2.0-0")
     .run_commands([
         "pip install --upgrade pip",
-        "pip install gradio==4.44.0 fastapi uvicorn requests pyyaml numpy safetensors transformers diffusers accelerate",
-
+        "pip install onnxruntime-gpu==1.20.1 gradio==4.44.0 fastapi uvicorn requests pyyaml numpy safetensors transformers diffusers accelerate",
         # ✅ tambahkan library yang sebelumnya belum ada
         "pip install fastapi uvicorn requests pyyaml",
         "pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121",
