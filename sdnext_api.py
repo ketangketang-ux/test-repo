@@ -1,30 +1,22 @@
-# sdnext_api.py - Copy this to your GitHub repo
+# sdnext_api.py
 import modal
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-import base64
-from io import BytesIO
-import torch
 import os
 import sys
-import time
 
-# Ambil GPU type dari env
-GPU_TYPE = os.getenv("MODAL_GPU_TYPE", "L4")  # Default L4
+GPU_TYPE = os.getenv("MODAL_GPU_TYPE", "L4")
 
-# Modal setup
 app = modal.App("sdnext-backend")
 image = modal.Image.debian_slim().apt_install(
-    "git", "wget", "libgl1-mesa-glx", "libglib2.0-0", "libsm6", "libxext6", "libxrender-dev", "libgomp1"
+    "git", "libgl1-mesa-glx", "libglib2.0-0"
 ).pip_install(
     "torch", "torchvision", "torchaudio", "--index-url", "https://download.pytorch.org/whl/cu118"
 ).pip_install(
     "diffusers", "transformers", "accelerate", "safetensors", "einops",
-    "opencv-python", "Pillow", "fastapi", "uvicorn", "pydantic", "tqdm",
+    "opencv-python", "Pillow", "fastapi", "uvicorn", "pydantic",
     "k-diffusion", "gradio", "psutil", "requests", "numpy", "scipy"
-)
+).pip_install("huggingface_hub")  # Tambahan penting!
 
-class Text2ImageRequest(BaseModel):
+class Text2ImageRequest(modal.BaseModel):
     prompt: str
     negative_prompt: str = ""
     width: int = 512
@@ -35,17 +27,11 @@ class Text2ImageRequest(BaseModel):
     sampler: str = "Euler a"
     model: str = "stable-diffusion-v1-5"
 
-class ImageResponse(BaseModel):
+class ImageResponse(modal.BaseModel):
     image_base64: str
     info: dict
 
-@app.cls(
-    gpu=GPU_TYPE,
-    timeout=600,
-    container_idle_timeout=300,
-    image=image,
-    secrets=[modal.Secret.from_name("huggingface-secret")] if modal.Secret.from_name("huggingface-secret") else None
-)
+@app.cls(gpu=GPU_TYPE, timeout=600, container_idle_timeout=300, image=image)
 class SDNextModel:
     def __enter__(self):
         print(f"🚀 Initializing SD.Next on {GPU_TYPE}...")
@@ -57,14 +43,13 @@ class SDNextModel:
         sys.path.append("/sdnext")
         os.chdir("/sdnext")
         
-        # Install requirements
+        # Install
         os.system("pip install -r requirements.txt --no-deps -q")
         os.system("pip install -r requirements-extra.txt --no-deps -q")
         
-        # Import modules
-        from modules import paths, shared, devices, sd_models
+        from modules import paths, shared, sd_models
         
-        # Initialize
+        # Setup
         shared.cmd_opts = type('obj', (object,), {
             'ckpt': None, 'data_dir': '/sdnext', 'models_dir': '/models',
             'no_download': True, 'skip_install': True
@@ -72,8 +57,6 @@ class SDNextModel:
         
         paths.script_path = "/sdnext"
         shared.models_path = "/models"
-        
-        # Create dirs
         os.makedirs("/models/Stable-diffusion", exist_ok=True)
         print("✅ Setup complete!")
     
@@ -98,7 +81,6 @@ class SDNextModel:
             from modules import shared, devices, sd_samplers
             from modules.processing import StableDiffusionProcessingTxt2Img, process_images
             
-            # Switch model if needed
             if not hasattr(self, 'current_model') or self.current_model != request.model:
                 self._load_model(request.model)
             
@@ -120,7 +102,6 @@ class SDNextModel:
             processed = process_images(p)
             img = processed.images[0]
             
-            # To base64
             buffered = BytesIO()
             img.save(buffered, format="PNG")
             img_base64 = base64.b64encode(buffered.getvalue()).decode()
@@ -139,10 +120,9 @@ class SDNextModel:
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
-# FastAPI app
-web_app = FastAPI()
+web_app = modal.FastAPI()
 
-@web_app.post("/generate", response_model=ImageResponse)
+@web_app.post("/generate")
 async def generate_image(request: Text2ImageRequest):
     model = SDNextModel()
     return model.generate.remote(request)
