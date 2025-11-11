@@ -1,4 +1,4 @@
-# sdnext_api.py - MODAL V1.0+ COMPATIBLE
+# sdnext_api.py - COMPLETE FIX
 import modal
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -13,14 +13,16 @@ GPU_TYPE = os.getenv("MODAL_GPU_TYPE", "L4")
 
 app = modal.App("sdnext-backend")
 image = modal.Image.debian_slim().apt_install(
-    "git", "libgl1-mesa-glx", "libglib2.0-0"
+    "git", "libgl1-mesa-glx", "libglib2.0-0",
+    "pkg-config",  # ✅ FIX: Tambahkan ini!
+    "build-essential"  # ✅ FIX: Compiler tools
 ).pip_install(
-    # ✅ FIX: Hapus extra_options, biarkan Modal handle CUDA version
     "torch", "torchvision", "torchaudio",
     "diffusers", "transformers", "accelerate", "safetensors", "einops",
     "opencv-python", "Pillow", "fastapi", "uvicorn", "pydantic",
-    "k-diffusion", "gradio", "psutil", "requests", "numpy", "scipy"
-).pip_install("huggingface_hub")
+    "k-diffusion", "gradio", "psutil", "requests", "numpy", "scipy",
+    "huggingface_hub"
+)
 
 class Text2ImageRequest(BaseModel):
     prompt: str
@@ -40,7 +42,7 @@ class ImageResponse(BaseModel):
 @app.cls(
     gpu=GPU_TYPE,
     timeout=600,
-    scaledown_window=300,  # ✅ Modal v1.0+ parameter
+    scaledown_window=300,
     image=image
 )
 class SDNextModel:
