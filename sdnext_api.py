@@ -1,90 +1,176 @@
-# sdnext_api.py - CORRECT SYNTAX
-import modal
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+# CELL 1-4: Sama seperti sebelumnya (setup, config, download, token)
+
+# CELL 5: DEPLOY (gunakan script di atas di GitHub, atau direct deploy)
+# CELL 6-7: Parse URL & Test
+
+# CELL 8: Gradio UI FULL
+import gradio as gr
+import requests
 import base64
-from io import BytesIO
-import torch
-import os
-import sys
-import time
+import io
 
-GPU_TYPE = os.getenv("MODAL_GPU_TYPE", "L4")
+# Daftar model
+AVAILABLE_MODELS = [
+    "stable-diffusion-v1-5", "stable-diffusion-xl-base-1.0",
+    "anything-v5", "dreamshaper", "gpt"
+]
 
-app = modal.App("sdnext-backend")
+# Daftar sampler
+SAMPLERS = ["Euler", "Euler a", "LMS", "Heun", "DPM2", "DPM2 a", "DPM++ 2S a", "DPM++ 2M", "DPM++ SDE", "DDIM", "PLMS", "UniPC"]
 
-# ✅ FIX: python_version adalah PARAMETER, bukan method
-image = modal.Image.debian_slim(python_version="3.11").apt_install(
-    "git", "libgl1-mesa-glx", "libglib2.0-0", "pkg-config", "build-essential"
-).pip_install(
-    "torch", "torchvision", "torchaudio",
-    "transformers", "accelerate", "diffusers", "safetensors", "einops",
-    "opencv-python", "Pillow", "fastapi", "uvicorn", "pydantic",
-    "gradio", "psutil", "requests", "numpy", "scipy", "huggingface_hub"
-)
+def get_models():
+    """Get list of models from Modal API"""
+    try:
+        response = requests.get(f"{MODAL_URL}/models", timeout=10)
+        if response.status_code == 200:
+            return response.json()['models']
+    except:
+        pass
+    return AVAILABLE_MODELS
 
-class Text2ImageRequest(BaseModel):
-    prompt: str; negative_prompt: str = ""; width: int = 512; height: int = 512; steps: int = 20
-    cfg_scale: float = 7.0; seed: int = -1; sampler: str = "Euler a"; model: str = "stable-diffusion-v1-5"
+def generate_txt2img(prompt, negative, width, height, steps, cfg, seed, sampler, model):
+    """Generate image from text"""
+    try:
+        payload = {
+            "prompt": prompt,
+            "negative_prompt": negative,
+            "width": width,
+            "height": height,
+            "steps": steps,
+            "cfg_scale": cfg,
+            "seed": seed,
+            "sampler": sampler,
+            "model": model
+        }
+        
+        response = requests.post(f"{MODAL_URL}/txt2img", json=payload, timeout=600)
+        
+        if response.status_code == 200:
+            result = response.json()
+            img_data = base64.b64decode(result["image_base64"])
+            img = Image.open(io.BytesIO(img_data))
+            info = json.dumps(result["info"], indent=2)
+            return img, f"✅ Success!\n\nInfo:\n{info}"
+        else:
+            return None, f"❌ Error: {response.status_code}\n{response.text}"
+            
+    except Exception as e:
+        return None, f"❌ Exception: {str(e)}"
 
-class ImageResponse(BaseModel):
-    image_base64: str; info: dict
-
-@app.cls(gpu=GPU_TYPE, timeout=600, scaledown_window=300, image=image)
-class SDNextModel:
-    def __enter__(self):
-        if not os.path.exists("/sdnext"):
-            os.system("git clone https://github.com/vladmandic/sdnext.git /sdnext")
-        sys.path.append("/sdnext"); os.chdir("/sdnext")
-        os.system("pip install -r requirements.txt --no-deps -q")
-        os.system("pip install -r requirements-extra.txt --no-deps -q")
-        from modules import paths, shared, sd_models
-        shared.cmd_opts = type('obj', (object,), {'ckpt': None, 'data_dir': '/sdnext', 'models_dir': '/models', 'no_download': True, 'skip_install': True})()
-        paths.script_path = "/sdnext"; shared.models_path = "/models"
-        os.makedirs("/models/Stable-diffusion", exist_ok=True)
-        print("✅ Setup complete!")
-    
-    def _load_model(self, model_name):
-        from modules import shared, sd_models
-        model_path = "stabilityai/stable-diffusion-xl-base-1.0" if "xl" in model_name else "runwayml/stable-diffusion-v1-5"
-        if not os.path.exists(f"/models/Stable-diffusion/{model_name}"):
-            print(f"📥 Downloading {model_name}...")
-            os.system(f"huggingface-cli download {model_path} --local-dir /models/Stable-diffusion/{model_name}")
-        shared.opts.sd_model_checkpoint = f"/models/Stable-diffusion/{model_name}"
-        sd_models.load_model(); self.current_model = model_name
-        print(f"✅ Model loaded: {model_name}")
-    
-    @modal.method()
-    def generate(self, request: Text2ImageRequest):
-        from modules import shared, devices, sd_samplers
-        from modules.processing import StableDiffusionProcessingTxt2Img, process_images
-        if not hasattr(self, 'current_model') or self.current_model != request.model:
-            self._load_model(request.model)
-        devices.torch_gc()
-        p = StableDiffusionProcessingTxt2Img(
-            sd_model=shared.sd_model, prompt=request.prompt, negative_prompt=request.negative_prompt,
-            width=request.width, height=request.height, steps=request.steps,
-            cfg_scale=request.cfg_scale, sampler_name=request.sampler,
-            seed=request.seed if request.seed != -1 else -1, batch_size=1,
-        )
-        processed = process_images(p); img = processed.images[0]
-        buffered = BytesIO(); img.save(buffered, format="PNG")
+def generate_img2img(prompt, negative, image, strength, steps, cfg, seed, sampler, model):
+    """Generate image from image"""
+    try:
+        # Convert PIL image to base64
+        buffered = io.BytesIO()
+        image.save(buffered, format="PNG")
         img_base64 = base64.b64encode(buffered.getvalue()).decode()
-        info = {"model": request.model, "seed": processed.seed, "steps": request.steps, "cfg_scale": request.cfg_scale, "sampler": request.sampler, "size": f"{request.width}x{request.height}"}
-        return ImageResponse(image_base64=img_base64, info=info)
+        
+        payload = {
+            "prompt": prompt,
+            "negative_prompt": negative,
+            "image_base64": img_base64,
+            "strength": strength,
+            "steps": steps,
+            "cfg_scale": cfg,
+            "seed": seed,
+            "sampler": sampler,
+            "model": model
+        }
+        
+        response = requests.post(f"{MODAL_URL}/img2img", json=payload, timeout=600)
+        
+        if response.status_code == 200:
+            result = response.json()
+            img_data = base64.b64decode(result["image_base64"])
+            img = Image.open(io.BytesIO(img_data))
+            info = json.dumps(result["info"], indent=2)
+            return img, f"✅ Success!\n\nInfo:\n{info}"
+        else:
+            return None, f"❌ Error: {response.status_code}\n{response.text}"
+            
+    except Exception as e:
+        return None, f"❌ Exception: {str(e)}"
 
-web_app = FastAPI()
+def open_webui():
+    """Open Modal WebUI in new tab"""
+    import webbrowser
+    webbrowser.open(f"{MODAL_URL}?__theme=dark")
+    return f"✅ Opening {MODAL_URL} in new tab!"
 
-@web_app.post("/generate")
-async def generate_image(request: Text2ImageRequest):
-    model = SDNextModel()
-    return model.generate.remote(request)
+# Create UI
+with gr.Blocks(title="SD.Next Full - Modal GPU", theme=gr.themes.Soft()) as demo:
+    gr.Markdown("# 🎨 SD.Next Full Version (vladmandic) + Modal GPU")
+    gr.Markdown(f"**Backend**: `{MODAL_URL}`")
+    
+    with gr.Tab("Text-to-Image"):
+        with gr.Row():
+            with gr.Column():
+                txt_prompt = gr.Textbox(label="📝 Prompt", lines=3, placeholder="masterpiece, best quality, ...")
+                txt_negative = gr.Textbox(label="⚠️ Negative Prompt", lines=2, value="nsfw, lowres, bad anatomy, text, error, blurry")
+                
+                with gr.Row():
+                    txt_model = gr.Dropdown(AVAILABLE_MODELS, value="stable-diffusion-v1-5", label="🏗️ Model")
+                    txt_sampler = gr.Dropdown(SAMPLERS, value="Euler a", label="🎨 Sampler")
+                
+                with gr.Row():
+                    txt_width = gr.Slider(256, 1024, 512, step=64, label="📐 Width")
+                    txt_height = gr.Slider(256, 1024, 512, step=64, label="📐 Height")
+                
+                with gr.Row():
+                    txt_steps = gr.Slider(10, 50, 25, step=1, label="🔄 Steps")
+                    txt_cfg = gr.Slider(1, 15, 7.0, step=0.5, label="🔧 CFG Scale")
+                
+                txt_seed = gr.Number(-1, label="🎲 Seed (-1 = random)")
+                txt_btn = gr.Button("🎨 Generate", variant="primary", size="lg")
+                
+            with gr.Column():
+                txt_output = gr.Image(label="🖼️ Output", height=512)
+                txt_info = gr.Textbox(label="ℹ️ Info", lines=6)
+    
+    with gr.Tab("Image-to-Image"):
+        with gr.Row():
+            with gr.Column():
+                img_prompt = gr.Textbox(label="📝 Prompt", lines=3)
+                img_negative = gr.Textbox(label="⚠️ Negative Prompt", lines=2)
+                img_input = gr.Image(label="📷 Input Image", type="pil")
+                
+                img_strength = gr.Slider(0.0, 1.0, 0.75, step=0.05, label="💪 Denoising Strength")
+                
+                with gr.Row():
+                    img_model = gr.Dropdown(AVAILABLE_MODELS, value="stable-diffusion-v1-5", label="Model")
+                    img_sampler = gr.Dropdown(SAMPLERS, value="Euler a", label="Sampler")
+                
+                with gr.Row():
+                    img_steps = gr.Slider(10, 50, 25, step=1, label="Steps")
+                    img_cfg = gr.Slider(1, 15, 7.0, step=0.5, label="CFG Scale")
+                
+                img_seed = gr.Number(-1, label="Seed")
+                img_btn = gr.Button("🔄 Generate img2img", variant="primary")
+                
+            with gr.Column():
+                img_output = gr.Image(label="🖼️ Output", height=512)
+                img_info = gr.Textbox(label="ℹ️ Info", lines=6)
+    
+    with gr.Tab("🎛️ WebUI"):
+        gr.Markdown("### Buka UI Bawaan SD.Next di Modal")
+        gr.Markdown("Fitur: ControlNet, Upscale, Settings Lengkap")
+        webui_btn = gr.Button("🚀 Launch SD.Next WebUI", variant="secondary")
+        webui_output = gr.Textbox(label="Status", lines=2)
+    
+    # Event handlers
+    txt_btn.click(
+        fn=generate_txt2img,
+        inputs=[txt_prompt, txt_negative, txt_width, txt_height, txt_steps, txt_cfg, txt_seed, txt_sampler, txt_model],
+        outputs=[txt_output, txt_info]
+    )
+    
+    img_btn.click(
+        fn=generate_img2img,
+        inputs=[img_prompt, img_negative, img_input, img_strength, img_steps, img_cfg, img_seed, img_sampler, img_model],
+        outputs=[img_output, img_info]
+    )
+    
+    webui_btn.click(fn=open_webui, outputs=webui_output)
 
-@web_app.get("/health")
-async def health():
-    return {"status": "ok", "gpu": GPU_TYPE, "repo": "vladmandic/sdnext"}
-
-@app.function()
-@modal.asgi_app()
-def fastapi_app():
-    return web_app
+# CELL 9: Launch
+demo.launch(share=True, debug=True, height=800)
