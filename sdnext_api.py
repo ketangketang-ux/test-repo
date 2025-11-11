@@ -62,21 +62,45 @@ print('[PATCH] Injected safe cmd_opts (no OpenVINO / no ONNX)')
         f.write(patch_code)
 
     # === Jalankan SD.Next GUI dengan patch ===
-    def start_sdnext():
-        cmd = [
-            "python", "-c",
-            f"import runpy; exec(open('{ROOT_DIR}/prepatch.py').read()); runpy.run_path('webui.py', run_name='__main__')",
-            "--listen", "0.0.0.0",
-            "--port", "8000",
-            "--skip-torch-cuda-test",
-            "--disable-safe-unpickle",
-            "--no-onnx",
-            "--no-half",
-            "--skip-version-check",
-            "--data-dir", DATA_DIR,
-            "--autolaunch",
-        ]
-        subprocess.Popen(cmd, cwd=ROOT_DIR, env=os.environ.copy())
+   def start_sdnext():
+    # Nonaktifkan ONNX sepenuhnya
+    os.environ["USE_ONNX"] = "0"
+    os.environ["DISABLE_ONNX"] = "1"
+    os.environ["FORCE_DISABLE_ONNX"] = "1"
+
+    # Tulis patch untuk blokir import modules.onnx_impl
+    patch_code = """
+import sys
+import types
+
+# Buat modul palsu modules.onnx_impl supaya gak dipanggil aslinya
+fake_mod = types.ModuleType('modules.onnx_impl')
+fake_mod.ort = None
+fake_mod.execution_providers = []
+fake_mod.DynamicSessionOptions = type('Dummy', (), {})()
+sys.modules['modules.onnx_impl'] = fake_mod
+
+print('[PATCH] Disabled ONNX import at startup.')
+"""
+
+    patch_path = f"{ROOT_DIR}/disable_onnx.py"
+    with open(patch_path, "w") as f:
+        f.write(patch_code)
+
+    cmd = [
+        "python", "-c",
+        f"import runpy; exec(open('{patch_path}').read()); runpy.run_path('webui.py', run_name='__main__')",
+        "--listen", "0.0.0.0",
+        "--port", "8000",
+        "--skip-torch-cuda-test",
+        "--disable-safe-unpickle",
+        "--no-half",
+        "--skip-version-check",
+        "--data-dir", DATA_DIR,
+        "--autolaunch",
+    ]
+
+    subprocess.Popen(cmd, cwd=ROOT_DIR, env=os.environ.copy())
 
     threading.Thread(target=start_sdnext, daemon=True).start()
     time.sleep(8)
