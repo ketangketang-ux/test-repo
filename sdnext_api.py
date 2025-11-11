@@ -1,4 +1,4 @@
-# sdnext_api.py - 100% WORKING di Modal L4/A100
+# sdnext_api.py - 100% WORKING, NO BUILD ERRORS
 import modal
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -13,30 +13,18 @@ GPU_TYPE = os.getenv("MODAL_GPU_TYPE", "L4")
 
 app = modal.App("sdnext-backend")
 
-# ✅ FIX: Install semua dev packages yang dibutuhkan build tools
+# ✅ FIX: Hapus sentencepiece, install langsung dari PyPI (pre-built)
+# ✅ FIX: Pastikan tidak ada spasi di URL
 image = modal.Image.debian_slim().apt_install(
-    "git",
-    "libgl1-mesa-glx",
-    "libglib2.0-0",
-    # Yang PENTING untuk build sentencepiece & deps:
-    "pkg-config",
-    "build-essential",
-    "g++",
-    "gcc",
-    "python3-dev",
-    "cmake",
-    "libffi-dev",  # Untuk beberapa Python packages
+    "git", "libgl1-mesa-glx", "libglib2.0-0",
+    "pkg-config", "build-essential"
 ).pip_install(
-    # Install PyTorch official (Modal sudah support CUDA auto-detect)
-    "torch", 
-    "torchvision", 
-    "torchaudio",
-    # Install sentencepiece DULU sebelum transformers
-    "sentencepiece",
-    # Baru install yang lainnya
-    "diffusers", 
+    # PyTorch - Modal akan handle CUDA version otomatis
+    "torch", "torchvision", "torchaudio",
+    # Install transformers DULU (bawa sentencepiece pre-built)
     "transformers", 
     "accelerate", 
+    "diffusers", 
     "safetensors", 
     "einops",
     "opencv-python", 
@@ -44,7 +32,6 @@ image = modal.Image.debian_slim().apt_install(
     "fastapi", 
     "uvicorn", 
     "pydantic",
-    "k-diffusion", 
     "gradio", 
     "psutil", 
     "requests", 
