@@ -1,156 +1,126 @@
-import os
-import subprocess
-import threading
-import time
+# app_modal.py - Backend SD.Next di Modal.com
 import modal
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+import base64
+from io import BytesIO
+from PIL import Image
+import torch
+from diffusers import StableDiffusionPipeline, StableDiffusionXLPipeline
+import os
 
-# === CONFIG ===
-APP_NAME = "sdnext-gui"
-ROOT_DIR = "/root/sdnext"
-DATA_DIR = "/data/sdnext"
-VOL_NAME = "sdnext-data"
-SDNEXT_GIT = "https://github.com/vladmandic/sdnext.git"
-GPU_TYPE = os.environ.get("MODAL_GPU_TYPE", "L4")
-
-# === IMAGE BUILD ===
-image = (
-    modal.Image.debian_slim(python_version="3.12")
-    .apt_install("git", "ffmpeg", "libgl1-mesa-glx", "libglib2.0-0")
-    .run_commands([
-        "pip install --upgrade pip",
-        # deps utama
-        "pip install gradio==4.44.0 fastapi uvicorn requests pyyaml numpy safetensors transformers diffusers accelerate",
-        # torch wheel (sesuaikan kalau Modal ganti CUDA)
-        "pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121",
-        # clone repo
-        f"git clone {SDNEXT_GIT} {ROOT_DIR} || true",
-        # try install requirements (tolerant)
-        f"cd {ROOT_DIR} && pip install -r requirements.txt --no-cache-dir || true",
-    ])
+# Konfigurasi Modal
+app = modal.App("sdnext-backend")
+image = modal.Image.debian_slim().pip_install(
+    "torch", "diffusers", "transformers", "accelerate",
+    "Pillow", "fastapi", "uvicorn", "pydantic"
+).run_commands(
+    "apt-get update && apt-get install -y git"
 )
 
-# === MODAL APP / VOLUME ===
-app = modal.App(name=APP_NAME, image=image)
-vol = modal.Volume.from_name(VOL_NAME, create_if_missing=True)
+class Text2ImageRequest(BaseModel):
+    prompt: str
+    negative_prompt: str = ""
+    width: int = 512
+    height: int = 512
+    steps: int = 20
+    cfg_scale: float = 7.5
+    seed: int = -1
+    model: str = "stable-diffusion-v1-5"
 
+class ImageResponse(BaseModel):
+    image_base64: str
+    info: dict
 
-def _patch_shared_file(repo_root):
-    """
-    Ensure modules/shared.py has safe defaults for cmd_opts.use_openvino / use_onnx.
-    This prepends a small patch header if not already patched.
-    """
-    shared_path = os.path.join(repo_root, "modules", "shared.py")
-    try:
-        if not os.path.exists(shared_path):
-            # nothing to patch (repo might be incomplete), just return
-            return False
-        with open(shared_path, "r", encoding="utf-8") as f:
-            content = f.read()
-        marker = "# PATCHED_BY_MODAL_SAFE_CMD_OPTS"
-        if marker in content:
-            return True  # already patched
-        header = f'''# {marker}
-# Added by modal deploy to ensure cmd_opts defaults exist (avoid AttributeError on use_openvino/use_onnx)
-try:
-    import argparse
-    # ensure cmd_opts exists in this module namespace
-    if 'cmd_opts' not in globals():
-        cmd_opts = argparse.Namespace()
-    if not hasattr(cmd_opts, 'use_openvino'):
-        cmd_opts.use_openvino = False
-    if not hasattr(cmd_opts, 'use_onnx'):
-        cmd_opts.use_onnx = False
-except Exception:
-    pass
+# Download model weights saat build image
+def download_models():
+    from huggingface_hub import snapshot_download
+    snapshot_download("runwayml/stable-diffusion-v1-5")
+    snapshot_download("stabilityai/stable-diffusion-xl-base-1.0")
 
-'''
-        new_content = header + content
-        with open(shared_path, "w", encoding="utf-8") as f:
-            f.write(new_content)
-        return True
-    except Exception as e:
-        print("! Warning: failed to patch modules/shared.py:", e)
-        return False
+image = image.run_function(download_models)
 
-
-@app.function(
-    gpu=GPU_TYPE,
-    timeout=3600,
-    scaledown_window=300,
-    volumes={DATA_DIR: vol},
+@app.cls(
+    gpu="A100",  # atau "T4" untuk lebih murah
+    timeout=300,  # 5 menit timeout
+    container_idle_timeout=300,  # idle timeout
+    image=image
 )
-@modal.web_server(8000, startup_timeout=600)
-def run():
-    """Start SD.Next GUI with safe patching for shared.cmd_opts"""
-    os.makedirs(DATA_DIR, exist_ok=True)
-
-    # ensure repo exists in container (image build does clone; keep check)
-    if not os.path.exists(ROOT_DIR):
+class SDNextModel:
+    def __enter__(self):
+        # Load model saat container start
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+        # Load SD 1.5
+        self.pipe_v1 = StableDiffusionPipeline.from_pretrained(
+            "runwayml/stable-diffusion-v1-5",
+            torch_dtype=torch.float16,
+            safety_checker=None
+        ).to(self.device)
+        
+        # Load SDXL
+        self.pipe_sdxl = StableDiffusionXLPipeline.from_pretrained(
+            "stabilityai/stable-diffusion-xl-base-1.0",
+            torch_dtype=torch.float16,
+            safety_checker=None
+        ).to(self.device)
+        
+        print("✅ Model loaded successfully!")
+    
+    @modal.method()
+    def generate(self, request: Text2ImageRequest):
         try:
-            subprocess.run(f"git clone {SDNEXT_GIT} {ROOT_DIR}", shell=True, check=True)
+            # Pilih model
+            pipe = self.pipe_sdxl if "xl" in request.model.lower() else self.pipe_v1
+            
+            # Set seed
+            generator = None
+            if request.seed != -1:
+                generator = torch.Generator(device=self.device).manual_seed(request.seed)
+            
+            # Generate image
+            result = pipe(
+                prompt=request.prompt,
+                negative_prompt=request.negative_prompt,
+                width=request.width,
+                height=request.height,
+                num_inference_steps=request.steps,
+                guidance_scale=request.cfg_scale,
+                generator=generator
+            ).images[0]
+            
+            # Convert to base64
+            buffered = BytesIO()
+            result.save(buffered, format="PNG")
+            img_str = base64.b64encode(buffered.getvalue()).decode()
+            
+            # Return info
+            info = {
+                "model": request.model,
+                "seed": request.seed,
+                "size": f"{request.width}x{request.height}",
+                "steps": request.steps
+            }
+            
+            return ImageResponse(image_base64=img_str, info=info)
+            
         except Exception as e:
-            print("Error cloning repo at runtime:", e)
+            raise HTTPException(status_code=500, detail=str(e))
 
-    # safe-patch shared.py so AttributeError use_openvino won't happen
-    patched = _patch_shared_file(ROOT_DIR)
-    if patched:
-        print("✅ modules/shared.py patched for safe cmd_opts defaults.")
-    else:
-        print("⚠️ modules/shared.py not patched (file missing or patch failed).")
+# FastAPI endpoint
+web_app = FastAPI()
 
-    # cd into repo
-    os.chdir(ROOT_DIR)
-    print("📁 Current repo path:", ROOT_DIR)
-    print("💾 Data volume path:", DATA_DIR)
+@web_app.post("/generate")
+async def generate_image(request: Text2ImageRequest):
+    model = SDNextModel()
+    response = model.generate.remote(request)
+    return response
 
-    # start SD.Next GUI (we avoid ONNX/OpenVINO features to reduce incompat)
-    def start_sdnext():
-        cmd = [
-            "python", "webui.py",
-            "--listen", "0.0.0.0",
-            "--port", "8000",
-            "--skip-torch-cuda-test",
-            "--disable-safe-unpickle",
-            "--no-onnx",
-            "--no-half",
-            "--skip-version-check",
-            "--data-dir", DATA_DIR,
-            "--autolaunch",
-        ]
-        # run non-blocking
-        subprocess.Popen(cmd, cwd=ROOT_DIR, env=os.environ.copy())
+@web_app.get("/health")
+async def health():
+    return {"status": "ok", "service": "sdnext-backend"}
 
-    t = threading.Thread(target=start_sdnext, daemon=True)
-    t.start()
-
-    # give it a few seconds to attempt startup
-    time.sleep(8)
-
-    # provide a simple FastAPI wrapper for health/status
-    app_api = FastAPI(title="SD.Next GUI (Modal patched)")
-    app_api.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
-    @app_api.get("/")
-    def root():
-        return JSONResponse({
-            "status": "ok",
-            "message": "SD.Next GUI launching (patched)",
-            "repo": ROOT_DIR,
-            "data_volume": DATA_DIR
-        })
-
-    @app_api.get("/health")
-    def health():
-        return JSONResponse({"status": "ok"})
-
-    print("🚀 SD.Next launch attempted. Check Modal dashboard -> Logs / Web Endpoints for URL.")
-    return app_api
+@app.function()
+@modal.asgi_app()
+def fastapi_app():
+    return web_app
