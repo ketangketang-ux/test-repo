@@ -1,7 +1,13 @@
 # sdnext_api.py
 import modal
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+import base64
+from io import BytesIO
+import torch
 import os
 import sys
+import time
 
 GPU_TYPE = os.getenv("MODAL_GPU_TYPE", "L4")
 
@@ -9,12 +15,13 @@ app = modal.App("sdnext-backend")
 image = modal.Image.debian_slim().apt_install(
     "git", "libgl1-mesa-glx", "libglib2.0-0"
 ).pip_install(
-    "torch", "torchvision", "torchaudio", "--index-url", "https://download.pytorch.org/whl/cu118"
+    "torch", "torchvision", "torchaudio",
+    extra_options=["--index-url", "https://download.pytorch.org/whl/cu118"]  # ✅ FIX INI!
 ).pip_install(
     "diffusers", "transformers", "accelerate", "safetensors", "einops",
     "opencv-python", "Pillow", "fastapi", "uvicorn", "pydantic",
     "k-diffusion", "gradio", "psutil", "requests", "numpy", "scipy"
-).pip_install("huggingface_hub")  # Tambahan penting!
+).pip_install("huggingface_hub")
 
 class Text2ImageRequest(modal.BaseModel):
     prompt: str
@@ -36,20 +43,17 @@ class SDNextModel:
     def __enter__(self):
         print(f"🚀 Initializing SD.Next on {GPU_TYPE}...")
         
-        # Clone repo
         if not os.path.exists("/sdnext"):
             os.system("git clone https://github.com/vladmandic/sdnext.git /sdnext")
         
         sys.path.append("/sdnext")
         os.chdir("/sdnext")
         
-        # Install
         os.system("pip install -r requirements.txt --no-deps -q")
         os.system("pip install -r requirements-extra.txt --no-deps -q")
         
         from modules import paths, shared, sd_models
         
-        # Setup
         shared.cmd_opts = type('obj', (object,), {
             'ckpt': None, 'data_dir': '/sdnext', 'models_dir': '/models',
             'no_download': True, 'skip_install': True
@@ -61,7 +65,6 @@ class SDNextModel:
         print("✅ Setup complete!")
     
     def _load_model(self, model_name):
-        """Load model"""
         from modules import shared, sd_models
         
         model_path = "stabilityai/stable-diffusion-xl-base-1.0" if "xl" in model_name else "runwayml/stable-diffusion-v1-5"
